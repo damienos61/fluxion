@@ -4,113 +4,100 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
+
+/* Forward declaration of Context to avoid circular dependency */
+typedef struct FluxionContext FluxionContext;
 
 /* ============================================================================
  * FLUXION — NODE CORE
- * A node is a dormant reactive entity.
- * It only executes when data is present.
- * ============================================================================
- */
-
-/* --- BASIC TYPES --- */
+ * ============================================================================ */
 
 typedef struct Node Node;
 
 /**
  * @brief Signature of a Fluxion node logic
- * @param self The node itself (access to state and metadata)
- * @param data The data received via the flow
+ * Updated to include the Context for data propagation.
  */
-typedef void (*NodeAction)(Node* self, void* data);
+typedef void (*NodeAction)(FluxionContext* ctx, Node* self, void* data);
 
-/**
- * @brief Possible node states (for debugging & tools)
- */
 typedef enum {
     FLUXION_NODE_SLEEPING = 0,
     FLUXION_NODE_READY    = 1,
-    FLUXION_NODE_RUNNING  = 2
+    FLUXION_NODE_RUNNING  = 2,
+    FLUXION_NODE_ERROR    = 3
 } FluxionNodeState;
+
+
 
 /**
  * @brief Core structure of a Fluxion node
  */
 struct Node {
     /* --- Identity --- */
-    uint32_t uid;              // Stable unique identifier
-    const char* name;          // Symbolic name
-    const char* data_type;     // Expected data type (debug)
+    uint32_t uid;
+    const char* name;
+    const char* data_type;
 
     /* --- Behavior --- */
-    NodeAction action;         // Business logic
-    void* state;               // Persistent node memory
-    size_t state_size;         // Size of the state (optional)
+    NodeAction action;         
+    void* state;               /* Persistent internal memory */
+    size_t state_size;
 
     /* --- Data --- */
-    void* input_buffer;        // Current received data
+    void* input_buffer;        
 
     /* --- Execution --- */
-    FluxionNodeState state_flag; // Current node state
-    uint64_t last_pulse_id;      // Reentrancy protection
+    FluxionNodeState state_flag; 
+    uint64_t last_pulse_id;    /* Prevention of infinite loops/reentrancy */
 
-    /* --- Graph --- */
-    struct Node** subscribers; // Dependent nodes
+    /* --- Graph (Topology) --- */
+    struct Node** subscribers; 
     size_t subscriber_count;
+    size_t subscriber_capacity; /* Optimization: avoids frequent reallocs */
 };
 
 /* ============================================================================
  * NODE MANAGEMENT API
- * ============================================================================
- */
+ * ============================================================================ */
 
 /**
- * @brief Initializes the internal memory state of the node
+ * @brief Allocates and copies internal state for the node.
  */
-void fluxion_node_set_state(Node* n, void* state_data, size_t size);
+void fluxion_node_set_state(Node* n, const void* state_data, size_t size);
 
 /**
- * @brief Removes a link between two nodes
+ * @brief Establishes a directed link from src to dst.
  */
+void fluxion_node_link(Node* src, Node* dst);
+
 void fluxion_node_unlink(Node* src, Node* dst);
 
-/**
- * @brief Frees all resources of the node
- */
 void fluxion_node_cleanup(Node* n);
 
-/**
- * @brief Prints node debug information
- */
-void fluxion_node_debug(const Node* n);
+/* --- Inline Helpers --- */
 
-/**
- * @brief Checks if the node is ready to execute
- */
-static inline int fluxion_node_is_ready(const Node* n) {
+static inline bool fluxion_node_is_ready(const Node* n) {
     return n && n->state_flag == FLUXION_NODE_READY;
 }
 
+static inline bool fluxion_node_has_subscribers(const Node* n) {
+    return n && n->subscriber_count > 0;
+}
+
 /* ============================================================================
- * DSL MACROS (FLUXION LANGUAGE)
- * ============================================================================
- */
+ * DSL MACROS
+ * ============================================================================ */
 
 /**
- * @brief Defines a Fluxion logic
- * Usage:
- *   FLUX_NODE(my_logic) {
- *       // code
- *   }
+ * @brief Defines node logic with the correct naming convention.
  */
-#define FLUX_NODE(name) void name##_logic(Node* self, void* data)
+#define FLUX_NODE(name) void name##_logic(FluxionContext* ctx, Node* self, void* data)
 
-/**
- * @brief Generates a pseudo-unique UID at compile time
- */
 #define FLUXION_UID(var) ((uint32_t)((uintptr_t)&(var) ^ __LINE__))
 
 /**
- * @brief Initializes a Fluxion node
+ * @brief Initializes a Node on the stack or heap.
  */
 #define NODE_INIT(node_var, logic_func, type_str) \
     node_var = (Node){ \
@@ -124,7 +111,13 @@ static inline int fluxion_node_is_ready(const Node* n) {
         .state_flag = FLUXION_NODE_SLEEPING, \
         .last_pulse_id = 0, \
         .subscribers = NULL, \
-        .subscriber_count = 0 \
+        .subscriber_count = 0, \
+        .subscriber_capacity = 0 \
     }
+
+/**
+ * @brief Simple DSL for connecting nodes.
+ */
+#define CONNECT(src, dst) fluxion_node_link(&src, &dst)
 
 #endif /* FLUXION_NODE_H */
